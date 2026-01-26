@@ -41,10 +41,11 @@ export async function getClientCredentialsToken(): Promise<string> {
   }
 
   const data = await response.json();
-  cachedToken = data.access_token;
+  const token: string = data.access_token;
+  cachedToken = token;
   tokenExpiresAt = Date.now() + data.expires_in * 1000;
 
-  return cachedToken;
+  return token;
 }
 
 /**
