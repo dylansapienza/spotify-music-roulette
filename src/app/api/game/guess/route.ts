@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { submitGuess, endRound, nextRound, startRound, getGame } from '@/lib/game/engine';
+import { submitGuess, endRound, getGame } from '@/lib/game/engine';
 import { GuessRequest } from '@/lib/game/types';
 import { triggerGameEvent, GAME_EVENTS } from '@/lib/pusher/server';
 
@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const game = getGame(code.toUpperCase());
+    const game = await getGame(code.toUpperCase());
     if (!game) {
       return NextResponse.json(
         { error: 'Game not found' },
@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Submit the guess
-    const result = submitGuess(code.toUpperCase(), playerId, guessedPlayerId);
+    const result = await submitGuess(code.toUpperCase(), playerId, guessedPlayerId);
     if (!result) {
       return NextResponse.json(
         { error: 'Failed to submit guess' },
@@ -47,8 +47,8 @@ export async function POST(request: NextRequest) {
 
     // Check if all players have guessed
     if (result.allGuessed) {
-      // End the round
-      const endResult = endRound(code.toUpperCase());
+      // End the round immediately
+      const endResult = await endRound(code.toUpperCase());
       if (endResult) {
         // Send round end with minimal data (strip to essentials for Pusher 10KB limit)
         await triggerGameEvent(code.toUpperCase(), GAME_EVENTS.ROUND_END, {
@@ -78,54 +78,8 @@ export async function POST(request: NextRequest) {
           heartTotals: endResult.heartTotals,
         });
 
-        // After a delay, either start next round or end game
-        const updatedGame = getGame(code.toUpperCase());
-        
-        setTimeout(async () => {
-          try {
-            if (updatedGame && updatedGame.currentRound + 1 >= updatedGame.totalRounds) {
-              // Game over
-              await triggerGameEvent(code.toUpperCase(), GAME_EVENTS.GAME_OVER, {
-                finalScores: updatedGame.scores,
-                heartTotals: updatedGame.heartTotals,
-              });
-            } else {
-              // Next round
-              const newRound = nextRound(code.toUpperCase());
-              if (newRound) {
-                // Start the round to set status to 'playing'
-                startRound(code.toUpperCase());
-                // Send minimal data for next round
-                await triggerGameEvent(code.toUpperCase(), GAME_EVENTS.ROUND_START, {
-                  round: {
-                    number: newRound.number,
-                    status: newRound.status,
-                    guesses: {},
-                    guessTimestamps: {},
-                    hearts: [],
-                    startedAt: newRound.startedAt,
-                    song: {
-                      track: {
-                        id: newRound.song.track.id,
-                        name: newRound.song.track.name,
-                        artists: newRound.song.track.artists.map((a) => ({ name: a.name })),
-                        album: {
-                          name: newRound.song.track.album.name,
-                          images: newRound.song.track.album.images.slice(0, 1),
-                        },
-                        deezerPreviewUrl: newRound.song.track.deezerPreviewUrl,
-                      },
-                      ownerId: null,
-                      ownerName: null,
-                    },
-                  },
-                });
-              }
-            }
-          } catch (err) {
-            console.error('Error in delayed round transition:', err);
-          }
-        }, 5000); // 5 second delay between rounds
+        // NOTE: Next round transition is now handled by client-side timer
+        // calling /api/game/next-round after 5 seconds
       }
     }
 

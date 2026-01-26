@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback, use } from 'react';
+import { useEffect, useState, useCallback, use, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { PresenceChannel } from 'pusher-js';
@@ -16,6 +16,9 @@ import { GuessButtons } from '@/components/game/guess-buttons';
 import { Scoreboard } from '@/components/game/scoreboard';
 import { ResultsModal } from '@/components/game/results-modal';
 import { formatArtists } from '@/lib/utils';
+
+const NEXT_ROUND_DELAY = 5000; // 5 seconds to show results before next round
+const RECOVERY_POLL_DELAY = 8000; // 8 seconds before recovery polling kicks in
 
 interface LocalPlayer {
   id: string;
@@ -68,6 +71,11 @@ export default function GamePage({ params }: { params: Promise<{ code: string }>
   const [hasHeartedThisRound, setHasHeartedThisRound] = useState(false);
   const [heartCount, setHeartCount] = useState(0);
   const [heartTotals, setHeartTotals] = useState<Record<string, number>>({});
+
+  // Ref to track if we've already triggered next round for this round number
+  const nextRoundTriggeredRef = useRef<number | null>(null);
+  // Ref to track if recovery polling is active
+  const recoveryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Load player info from localStorage
   useEffect(() => {
@@ -153,6 +161,11 @@ export default function GamePage({ params }: { params: Promise<{ code: string }>
       });
 
       channel.bind(GAME_EVENTS.ROUND_START, (data: { round: RoundData }) => {
+        // Clear recovery timeout since we got the event
+        if (recoveryTimeoutRef.current) {
+          clearTimeout(recoveryTimeoutRef.current);
+          recoveryTimeoutRef.current = null;
+        }
         setCurrentRound(data.round);
         setSelectedGuess(null);
         setHasGuessed(false);
@@ -206,6 +219,11 @@ export default function GamePage({ params }: { params: Promise<{ code: string }>
       });
 
       channel.bind(GAME_EVENTS.GAME_OVER, (data: { finalScores: Record<string, number>; heartTotals?: Record<string, number> }) => {
+        // Clear recovery timeout since game is over
+        if (recoveryTimeoutRef.current) {
+          clearTimeout(recoveryTimeoutRef.current);
+          recoveryTimeoutRef.current = null;
+        }
         setGameState((prev) => {
           if (!prev) return prev;
           return { ...prev, scores: data.finalScores, status: 'finished' };
@@ -223,6 +241,70 @@ export default function GamePage({ params }: { params: Promise<{ code: string }>
       unsubscribeFromGame(code);
     };
   }, [code, currentPlayer]);
+
+  // Client-side timer to trigger next round after results are shown
+  useEffect(() => {
+    if (!showResults || !currentRound || !gameState) return;
+
+    // Don't trigger if we've already triggered for this round
+    if (nextRoundTriggeredRef.current === currentRound.number) return;
+
+    const nextRoundTimer = setTimeout(async () => {
+      // Mark as triggered for this round
+      nextRoundTriggeredRef.current = currentRound.number;
+
+      try {
+        await fetch('/api/game/next-round', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            code: gameState.code,
+            currentRoundNumber: currentRound.number,
+          }),
+        });
+      } catch (err) {
+        console.error('Failed to trigger next round:', err);
+      }
+
+      // Start recovery polling in case Pusher event is missed
+      recoveryTimeoutRef.current = setTimeout(async () => {
+        // If we're still showing results for the same round, poll for state
+        if (showResults && currentRound.number === nextRoundTriggeredRef.current) {
+          try {
+            const response = await fetch(`/api/game/${code}`);
+            if (response.ok) {
+              const data = await response.json();
+
+              // Check if game has finished
+              if (data.status === 'finished') {
+                setGameState((prev) => prev ? { ...prev, scores: data.scores, status: 'finished' } : prev);
+                setView('results');
+                return;
+              }
+
+              // Check if round has advanced
+              if (data.currentRound > gameState.currentRound) {
+                // Round advanced but we missed the event - trigger a page refresh
+                // to get the new round data from the Pusher connection
+                console.log('Recovery: Round advanced, refreshing game state');
+                window.location.reload();
+              }
+            }
+          } catch (err) {
+            console.error('Recovery poll failed:', err);
+          }
+        }
+      }, RECOVERY_POLL_DELAY);
+    }, NEXT_ROUND_DELAY);
+
+    return () => {
+      clearTimeout(nextRoundTimer);
+      if (recoveryTimeoutRef.current) {
+        clearTimeout(recoveryTimeoutRef.current);
+      }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showResults, currentRound?.number, gameState?.code, gameState?.currentRound, code]);
 
   const handleStartGame = useCallback(async () => {
     if (!currentPlayer || !gameState) return;

@@ -7,7 +7,7 @@ export async function GET(
 ) {
   try {
     const { code } = await params;
-    
+
     if (!code) {
       return NextResponse.json(
         { error: 'Missing game code' },
@@ -15,7 +15,7 @@ export async function GET(
       );
     }
 
-    const game = getGame(code.toUpperCase());
+    const game = await getGame(code.toUpperCase());
     if (!game) {
       return NextResponse.json(
         { error: 'Game not found' },

@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
   }
 
   // Check if game exists before starting the stream
-  const existingGame = getGame(code.toUpperCase());
+  const existingGame = await getGame(code.toUpperCase());
   if (!existingGame) {
     return NextResponse.json({ error: 'Game not found' }, { status: 404 });
   }
@@ -36,7 +36,7 @@ export async function POST(request: NextRequest) {
   }
 
   const encoder = new TextEncoder();
-  
+
   const stream = new ReadableStream({
     async start(controller) {
       const sendEvent = (data: object) => {
@@ -49,7 +49,7 @@ export async function POST(request: NextRequest) {
 
         // Fetch tracks from all selected playlists
         console.log(`Player ${playerName}: Fetching tracks from ${selectedPlaylists.length} playlists...`);
-        
+
         const allTracks: SpotifyTrack[] = [];
         const seenTrackIds = new Set<string>();
 
@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
           try {
             const tracks = await getPlaylistTracks(playlist.id, 100);
             console.log(`  - ${playlist.name}: ${tracks.length} tracks`);
-            
+
             // Add unique tracks only
             for (const track of tracks) {
               if (!seenTrackIds.has(track.id)) {
@@ -71,21 +71,21 @@ export async function POST(request: NextRequest) {
         }
 
         console.log(`Player ${playerName}: ${allTracks.length} unique tracks from playlists`);
-        
+
         // Randomly select up to MAX_SONGS_PER_PLAYER tracks to keep loading fast
         const shuffledTracks = shuffleArray(allTracks);
         const selectedTracks = shuffledTracks.slice(0, MAX_SONGS_PER_PLAYER);
         console.log(`Player ${playerName}: Selected ${selectedTracks.length} random tracks for processing`);
-        
+
         // Send progress update with total track count
         sendEvent({ type: 'progress', completed: 0, total: selectedTracks.length });
-        
+
         // Fetch Deezer preview URLs for selected tracks with progress updates
         console.log(`Fetching Deezer previews for ${selectedTracks.length} tracks...`);
         const tracksWithPreviews = await batchGetDeezerPreviews(selectedTracks, (completed, total) => {
           sendEvent({ type: 'progress', completed, total });
         });
-        
+
         const playableCount = tracksWithPreviews.filter((t) => t.deezerPreviewUrl).length;
         console.log(`Player ${playerName}: ${playableCount}/${tracksWithPreviews.length} tracks have Deezer previews`);
 
@@ -103,7 +103,7 @@ export async function POST(request: NextRequest) {
         };
 
         // Add player to game
-        const gameState = addPlayerToGame(code.toUpperCase(), player);
+        const gameState = await addPlayerToGame(code.toUpperCase(), player);
         if (!gameState) {
           sendEvent({ type: 'error', error: 'Failed to join game' });
           controller.close();
@@ -133,7 +133,7 @@ export async function POST(request: NextRequest) {
           success: true,
           gameState,
         });
-        
+
         controller.close();
       } catch (error) {
         console.error('Join game error:', error);

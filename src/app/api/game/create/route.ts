@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
   }
 
   const encoder = new TextEncoder();
-  
+
   const stream = new ReadableStream({
     async start(controller) {
       const sendEvent = (data: object) => {
@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
 
         // Fetch tracks from all selected playlists
         console.log(`Host ${hostName}: Fetching tracks from ${selectedPlaylists.length} playlists...`);
-        
+
         const allTracks: SpotifyTrack[] = [];
         const seenTrackIds = new Set<string>();
 
@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
           try {
             const tracks = await getPlaylistTracks(playlist.id, 100);
             console.log(`  - ${playlist.name}: ${tracks.length} tracks`);
-            
+
             // Add unique tracks only
             for (const track of tracks) {
               if (!seenTrackIds.has(track.id)) {
@@ -60,21 +60,21 @@ export async function POST(request: NextRequest) {
         }
 
         console.log(`Host ${hostName}: ${allTracks.length} unique tracks from playlists`);
-        
+
         // Randomly select up to MAX_SONGS_PER_PLAYER tracks to keep loading fast
         const shuffledTracks = shuffleArray(allTracks);
         const selectedTracks = shuffledTracks.slice(0, MAX_SONGS_PER_PLAYER);
         console.log(`Host ${hostName}: Selected ${selectedTracks.length} random tracks for processing`);
-        
+
         // Send progress update with total track count
         sendEvent({ type: 'progress', completed: 0, total: selectedTracks.length });
-        
+
         // Fetch Deezer preview URLs for selected tracks with progress updates
         console.log(`Fetching Deezer previews for ${selectedTracks.length} tracks...`);
         const tracksWithPreviews = await batchGetDeezerPreviews(selectedTracks, (completed, total) => {
           sendEvent({ type: 'progress', completed, total });
         });
-        
+
         const playableCount = tracksWithPreviews.filter((t) => t.deezerPreviewUrl).length;
         console.log(`Host ${hostName}: ${playableCount}/${tracksWithPreviews.length} tracks have Deezer previews`);
 
@@ -92,7 +92,7 @@ export async function POST(request: NextRequest) {
         };
 
         // Create the game
-        const gameState = createGame(host, 'medium_term', totalRounds);
+        const gameState = await createGame(host, 'medium_term', totalRounds);
         console.log(`Game created with code: ${gameState.code}`);
 
         // Send complete event with game data
@@ -101,7 +101,7 @@ export async function POST(request: NextRequest) {
           code: gameState.code,
           gameState,
         });
-        
+
         controller.close();
       } catch (error) {
         console.error('Create game error:', error);

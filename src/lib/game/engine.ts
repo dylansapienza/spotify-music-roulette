@@ -1,5 +1,6 @@
-import { GameState, Player, Round, RoundSong, SpotifyTrack, TimeRange, RoundCount, ROUND_DURATION, PlaylistSelection } from './types';
+import { GameState, Player, Round, RoundSong, TimeRange, RoundCount, ROUND_DURATION } from './types';
 import { createGameCode, shuffleArray } from '../utils';
+import { getGameFromRedis, setGameInRedis, deleteGameFromRedis, gameExistsInRedis } from './redis-storage';
 
 const DEFAULT_TOTAL_ROUNDS: RoundCount = 10;
 const BASE_POINTS = 100;
@@ -19,29 +20,26 @@ function calculateTimeBasedScore(roundStartedAt: number, guessTimestamp: number)
   return Math.max(MIN_POINTS, score);
 }
 
-// In-memory game storage (replace with Redis/KV in production)
-const games = new Map<string, GameState>();
-
-export function getGame(code: string): GameState | undefined {
-  return games.get(code);
+export async function getGame(code: string): Promise<GameState | null> {
+  return getGameFromRedis(code);
 }
 
-export function setGame(code: string, game: GameState): void {
-  games.set(code, game);
+export async function setGame(code: string, game: GameState): Promise<void> {
+  await setGameInRedis(code, game);
 }
 
-export function deleteGame(code: string): void {
-  games.delete(code);
+export async function deleteGame(code: string): Promise<void> {
+  await deleteGameFromRedis(code);
 }
 
-export function createGame(
+export async function createGame(
   host: Player,
   timeRange: TimeRange = 'medium_term',
   totalRounds: RoundCount = DEFAULT_TOTAL_ROUNDS
-): GameState {
+): Promise<GameState> {
   let code = createGameCode();
   // Ensure unique code
-  while (games.has(code)) {
+  while (await gameExistsInRedis(code)) {
     code = createGameCode();
   }
 
@@ -60,12 +58,12 @@ export function createGame(
     timeRange,
   };
 
-  games.set(code, gameState);
+  await setGameInRedis(code, gameState);
   return gameState;
 }
 
-export function addPlayerToGame(code: string, player: Player): GameState | null {
-  const game = games.get(code);
+export async function addPlayerToGame(code: string, player: Player): Promise<GameState | null> {
+  const game = await getGameFromRedis(code);
   if (!game || game.status !== 'lobby') {
     return null;
   }
@@ -77,17 +75,19 @@ export function addPlayerToGame(code: string, player: Player): GameState | null 
     existingPlayer.isReady = player.isReady;
     existingPlayer.topTracks = player.topTracks;
     existingPlayer.selectedPlaylists = player.selectedPlaylists;
+    await setGameInRedis(code, game);
     return game;
   }
 
   game.players.push(player);
   game.scores[player.id] = 0;
   game.heartTotals[player.id] = 0;
+  await setGameInRedis(code, game);
   return game;
 }
 
-export function removePlayerFromGame(code: string, playerId: string): GameState | null {
-  const game = games.get(code);
+export async function removePlayerFromGame(code: string, playerId: string): Promise<GameState | null> {
+  const game = await getGameFromRedis(code);
   if (!game) {
     return null;
   }
@@ -99,31 +99,8 @@ export function removePlayerFromGame(code: string, playerId: string): GameState 
 
   // Mark as disconnected instead of removing
   game.players[playerIndex].isConnected = false;
+  await setGameInRedis(code, game);
   return game;
-}
-
-/**
- * Assigns a song to a single owner based on who has it ranked highest
- */
-function assignSongOwner(track: SpotifyTrack, players: Player[]): Player | null {
-  const playersWithSong = players.filter((p) =>
-    p.topTracks.some((t) => t.id === track.id)
-  );
-
-  if (playersWithSong.length === 0) {
-    return null;
-  }
-
-  if (playersWithSong.length === 1) {
-    return playersWithSong[0];
-  }
-
-  // Multiple players - assign to whoever has it ranked higher (lower index = higher rank)
-  return playersWithSong.reduce((best, player) => {
-    const playerRank = player.topTracks.findIndex((t) => t.id === track.id);
-    const bestRank = best.topTracks.findIndex((t) => t.id === track.id);
-    return playerRank < bestRank ? player : best;
-  });
 }
 
 /**
@@ -146,15 +123,15 @@ export function buildSongPool(players: Player[], totalRounds: number = DEFAULT_T
   // Go through each player's tracks and assign ownership
   // Process by rank (index) to handle duplicates - higher ranked (lower index) wins
   const maxTracks = Math.max(...players.map((p) => p.topTracks.length));
-  
+
   for (let rank = 0; rank < maxTracks; rank++) {
     for (const player of players) {
       const track = player.topTracks[rank];
       if (!track) continue;
-      
+
       // Skip if this track was already assigned to someone with higher rank
       if (usedTrackIds.has(track.id)) continue;
-      
+
       usedTrackIds.add(track.id);
       songsByOwner.get(player.id)!.push({
         track,
@@ -183,11 +160,11 @@ export function buildSongPool(players: Player[], totalRounds: number = DEFAULT_T
     const playerSongs = songsByOwner.get(player.id) || [];
     const targetCount = baseSongsPerPlayer + (remainder > 0 ? 1 : 0);
     if (remainder > 0) remainder--;
-    
+
     const songsToTake = Math.min(targetCount, playerSongs.length);
     balancedPool.push(...playerSongs.slice(0, songsToTake));
     playerContributions[player.id] = songsToTake;
-    
+
     // Remove taken songs from available pool
     songsByOwner.set(player.id, playerSongs.slice(songsToTake));
   }
@@ -195,10 +172,10 @@ export function buildSongPool(players: Player[], totalRounds: number = DEFAULT_T
   // Second pass: if we don't have enough songs, fill from players with extras
   while (balancedPool.length < totalRounds) {
     let addedAny = false;
-    
+
     for (const player of players) {
       if (balancedPool.length >= totalRounds) break;
-      
+
       const remainingSongs = songsByOwner.get(player.id) || [];
       if (remainingSongs.length > 0) {
         balancedPool.push(remainingSongs[0]);
@@ -207,7 +184,7 @@ export function buildSongPool(players: Player[], totalRounds: number = DEFAULT_T
         addedAny = true;
       }
     }
-    
+
     // If no player has any songs left, stop
     if (!addedAny) break;
   }
@@ -219,8 +196,8 @@ export function buildSongPool(players: Player[], totalRounds: number = DEFAULT_T
   return shuffleArray(balancedPool);
 }
 
-export function startGame(code: string): GameState | null {
-  const game = games.get(code);
+export async function startGame(code: string): Promise<GameState | null> {
+  const game = await getGameFromRedis(code);
   if (!game || game.status !== 'lobby') {
     return null;
   }
@@ -228,10 +205,10 @@ export function startGame(code: string): GameState | null {
   // Build the song pool with even distribution across players
   const requestedRounds = game.totalRounds;
   const songPool = buildSongPool(game.players, requestedRounds);
-  
+
   // Limit rounds to available songs (in case players don't have enough)
   const totalRounds = Math.min(requestedRounds, songPool.length);
-  
+
   if (totalRounds === 0) {
     return null; // No playable songs
   }
@@ -257,11 +234,12 @@ export function startGame(code: string): GameState | null {
   };
   game.rounds.push(firstRound);
 
+  await setGameInRedis(code, game);
   return game;
 }
 
-export function startRound(code: string): Round | null {
-  const game = games.get(code);
+export async function startRound(code: string): Promise<Round | null> {
+  const game = await getGameFromRedis(code);
   if (!game || game.status !== 'playing') {
     return null;
   }
@@ -273,15 +251,16 @@ export function startRound(code: string): Round | null {
 
   currentRound.status = 'playing';
   currentRound.startedAt = Date.now();
+  await setGameInRedis(code, game);
   return currentRound;
 }
 
-export function submitGuess(
+export async function submitGuess(
   code: string,
   playerId: string,
   guessedPlayerId: string
-): { round: Round; allGuessed: boolean } | null {
-  const game = games.get(code);
+): Promise<{ round: Round; allGuessed: boolean } | null> {
+  const game = await getGameFromRedis(code);
   if (!game || game.status !== 'playing') {
     return null;
   }
@@ -299,11 +278,12 @@ export function submitGuess(
   const connectedPlayers = game.players.filter((p) => p.isConnected);
   const allGuessed = connectedPlayers.every((p) => currentRound.guesses[p.id]);
 
+  await setGameInRedis(code, game);
   return { round: currentRound, allGuessed };
 }
 
-export function endRound(code: string): { round: Round; scores: Record<string, number>; roundScores: Record<string, number>; heartTotals: Record<string, number> } | null {
-  const game = games.get(code);
+export async function endRound(code: string): Promise<{ round: Round; scores: Record<string, number>; roundScores: Record<string, number>; heartTotals: Record<string, number> } | null> {
+  const game = await getGameFromRedis(code);
   if (!game || game.status !== 'playing') {
     return null;
   }
@@ -342,11 +322,12 @@ export function endRound(code: string): { round: Round; scores: Record<string, n
 
   currentRound.status = 'complete';
 
+  await setGameInRedis(code, game);
   return { round: currentRound, scores: { ...game.scores }, roundScores, heartTotals: { ...game.heartTotals } };
 }
 
-export function nextRound(code: string): Round | null {
-  const game = games.get(code);
+export async function nextRound(code: string): Promise<Round | null> {
+  const game = await getGameFromRedis(code);
   if (!game || game.status !== 'playing') {
     return null;
   }
@@ -355,6 +336,7 @@ export function nextRound(code: string): Round | null {
 
   if (game.currentRound >= game.totalRounds) {
     game.status = 'finished';
+    await setGameInRedis(code, game);
     return null;
   }
 
@@ -369,14 +351,15 @@ export function nextRound(code: string): Round | null {
   };
   game.rounds.push(newRound);
 
+  await setGameInRedis(code, game);
   return newRound;
 }
 
-export function submitHeart(
+export async function submitHeart(
   code: string,
   playerId: string
-): { success: boolean; visibleHeartCount: number; isOwnSong?: boolean; error?: string } {
-  const game = games.get(code);
+): Promise<{ success: boolean; visibleHeartCount: number; isOwnSong?: boolean; error?: string }> {
+  const game = await getGameFromRedis(code);
   if (!game || game.status !== 'playing') {
     return { success: false, visibleHeartCount: 0, error: 'Game not found or not playing' };
   }
@@ -410,15 +393,16 @@ export function submitHeart(
   // Increment heart total for the song owner
   game.heartTotals[songOwnerId] = (game.heartTotals[songOwnerId] || 0) + 1;
 
+  await setGameInRedis(code, game);
   return { success: true, visibleHeartCount: currentRound.hearts.length };
 }
 
-export function getGameResults(code: string): {
+export async function getGameResults(code: string): Promise<{
   scores: Record<string, number>;
   heartTotals: Record<string, number>;
   players: Player[];
-} | null {
-  const game = games.get(code);
+} | null> {
+  const game = await getGameFromRedis(code);
   if (!game) {
     return null;
   }

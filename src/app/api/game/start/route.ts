@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { startGame, getGame, startRound, buildSongPool } from '@/lib/game/engine';
+import { startGame, getGame, startRound } from '@/lib/game/engine';
 import { StartGameRequest } from '@/lib/game/types';
 import { triggerGameEvent, GAME_EVENTS } from '@/lib/pusher/server';
 
@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const game = getGame(code.toUpperCase());
+    const game = await getGame(code.toUpperCase());
     if (!game) {
       return NextResponse.json(
         { error: 'Game not found' },
@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
     console.log(`Game ${code}: Total tracks: ${totalTracks}, With Deezer previews: ${tracksWithDeezerPreviews}`);
 
     // Start the game
-    const gameState = startGame(code.toUpperCase());
+    const gameState = await startGame(code.toUpperCase());
     if (!gameState) {
       // Provide more helpful error message
       const errorMsg = tracksWithDeezerPreviews === 0
@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
     });
 
     // Start the first round after a short delay
-    const round = startRound(code.toUpperCase());
+    const round = await startRound(code.toUpperCase());
     if (round) {
       // Send round start event with minimal song info (strip to essentials)
       await triggerGameEvent(code.toUpperCase(), GAME_EVENTS.ROUND_START, {

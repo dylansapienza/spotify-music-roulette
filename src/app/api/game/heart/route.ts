@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const game = getGame(code.toUpperCase());
+    const game = await getGame(code.toUpperCase());
     if (!game) {
       return NextResponse.json(
         { error: 'Game not found' },
@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Submit the heart
-    const result = submitHeart(code.toUpperCase(), playerId);
+    const result = await submitHeart(code.toUpperCase(), playerId);
     if (!result.success) {
       return NextResponse.json(
         { error: result.error || 'Failed to submit heart' },
