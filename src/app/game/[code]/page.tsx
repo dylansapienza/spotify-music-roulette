@@ -246,8 +246,14 @@ export default function GamePage({ params }: { params: Promise<{ code: string }>
   useEffect(() => {
     if (!showResults || !currentRound || !gameState) return;
 
+    // Only the host triggers the next round to avoid race conditions
+    if (!currentPlayer?.isHost) return;
+
     // Don't trigger if we've already triggered for this round
     if (nextRoundTriggeredRef.current === currentRound.number) return;
+
+    // Create abort controller for cleanup
+    const abortController = new AbortController();
 
     const nextRoundTimer = setTimeout(async () => {
       // Mark as triggered for this round
@@ -261,17 +267,23 @@ export default function GamePage({ params }: { params: Promise<{ code: string }>
             code: gameState.code,
             currentRoundNumber: currentRound.number,
           }),
+          signal: abortController.signal,
         });
       } catch (err) {
+        // Ignore abort errors
+        if (err instanceof Error && err.name === 'AbortError') return;
         console.error('Failed to trigger next round:', err);
       }
 
       // Start recovery polling in case Pusher event is missed
       recoveryTimeoutRef.current = setTimeout(async () => {
+        if (abortController.signal.aborted) return;
         // If we're still showing results for the same round, poll for state
         if (showResults && currentRound.number === nextRoundTriggeredRef.current) {
           try {
-            const response = await fetch(`/api/game/${code}`);
+            const response = await fetch(`/api/game/${code}`, {
+              signal: abortController.signal,
+            });
             if (response.ok) {
               const data = await response.json();
 
@@ -291,6 +303,8 @@ export default function GamePage({ params }: { params: Promise<{ code: string }>
               }
             }
           } catch (err) {
+            // Ignore abort errors
+            if (err instanceof Error && err.name === 'AbortError') return;
             console.error('Recovery poll failed:', err);
           }
         }
@@ -299,12 +313,13 @@ export default function GamePage({ params }: { params: Promise<{ code: string }>
 
     return () => {
       clearTimeout(nextRoundTimer);
+      abortController.abort();
       if (recoveryTimeoutRef.current) {
         clearTimeout(recoveryTimeoutRef.current);
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showResults, currentRound?.number, gameState?.code, gameState?.currentRound, code]);
+  }, [showResults, currentRound?.number, gameState?.code, gameState?.currentRound, code, currentPlayer?.isHost]);
 
   const handleStartGame = useCallback(async () => {
     if (!currentPlayer || !gameState) return;
