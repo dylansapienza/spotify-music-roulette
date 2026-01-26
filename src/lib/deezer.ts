@@ -2,9 +2,106 @@ import { SpotifyTrack } from './game/types';
 
 const DEEZER_API_BASE = 'https://api.deezer.com';
 
+// Retry configuration
+const RETRY_CONFIG = {
+  maxRetries: 3,
+  baseDelayMs: 1000,      // Start with 1 second
+  maxDelayMs: 10000,      // Cap at 10 seconds
+  jitterFactor: 0.3,      // Add up to 30% random jitter
+};
+
 // In-memory cache for Deezer preview URLs
 // Key: Spotify track ID, Value: Deezer preview URL or null if not found
 const previewCache = new Map<string, string | null>();
+
+/**
+ * Sleep for a given number of milliseconds
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Calculate delay with exponential backoff and jitter
+ */
+function getBackoffDelay(attempt: number): number {
+  // Exponential backoff: baseDelay * 2^attempt
+  const exponentialDelay = RETRY_CONFIG.baseDelayMs * Math.pow(2, attempt);
+  const cappedDelay = Math.min(exponentialDelay, RETRY_CONFIG.maxDelayMs);
+  
+  // Add jitter to prevent thundering herd
+  const jitter = cappedDelay * RETRY_CONFIG.jitterFactor * Math.random();
+  return cappedDelay + jitter;
+}
+
+/**
+ * Fetch with retry logic and exponential backoff
+ * Handles rate limiting (429) and transient server errors (5xx)
+ */
+async function fetchWithRetry(
+  url: string,
+  context: string
+): Promise<Response | null> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt <= RETRY_CONFIG.maxRetries; attempt++) {
+    try {
+      const response = await fetch(url);
+      
+      // Success or client error (except rate limit) - don't retry
+      if (response.ok || (response.status >= 400 && response.status < 500 && response.status !== 429)) {
+        return response;
+      }
+      
+      // Rate limited (429) or server error (5xx) - retry with backoff
+      if (response.status === 429 || response.status >= 500) {
+        const isRateLimit = response.status === 429;
+        const retryAfter = response.headers.get('Retry-After');
+        
+        if (attempt < RETRY_CONFIG.maxRetries) {
+          // Use Retry-After header if provided, otherwise use exponential backoff
+          let delayMs = getBackoffDelay(attempt);
+          if (retryAfter && isRateLimit) {
+            const retryAfterSeconds = parseInt(retryAfter, 10);
+            if (!isNaN(retryAfterSeconds)) {
+              delayMs = retryAfterSeconds * 1000;
+            }
+          }
+          
+          console.log(
+            `Deezer ${isRateLimit ? 'rate limited' : `error ${response.status}`} for ${context}. ` +
+            `Retrying in ${Math.round(delayMs / 1000)}s (attempt ${attempt + 1}/${RETRY_CONFIG.maxRetries})`
+          );
+          
+          await sleep(delayMs);
+          continue;
+        }
+        
+        console.warn(`Deezer request failed after ${RETRY_CONFIG.maxRetries} retries for ${context}`);
+        return null;
+      }
+      
+      // Other non-OK status - return as-is
+      return response;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      
+      // Network errors - retry with backoff
+      if (attempt < RETRY_CONFIG.maxRetries) {
+        const delayMs = getBackoffDelay(attempt);
+        console.log(
+          `Deezer network error for ${context}: ${lastError.message}. ` +
+          `Retrying in ${Math.round(delayMs / 1000)}s (attempt ${attempt + 1}/${RETRY_CONFIG.maxRetries})`
+        );
+        await sleep(delayMs);
+        continue;
+      }
+    }
+  }
+  
+  console.error(`Deezer request failed after ${RETRY_CONFIG.maxRetries} retries for ${context}:`, lastError);
+  return null;
+}
 
 interface DeezerTrack {
   id: number;
@@ -35,7 +132,12 @@ interface DeezerSearchResponse {
  */
 export async function getDeezerTrackByISRC(isrc: string): Promise<DeezerTrack | null> {
   try {
-    const response = await fetch(`${DEEZER_API_BASE}/track/isrc:${isrc}`);
+    const url = `${DEEZER_API_BASE}/track/isrc:${isrc}`;
+    const response = await fetchWithRetry(url, `ISRC:${isrc}`);
+    
+    if (!response) {
+      return null;
+    }
     
     if (!response.ok) {
       console.log(`Deezer ISRC lookup failed for ${isrc}: ${response.status}`);
@@ -78,7 +180,12 @@ export async function searchDeezerTrack(
     
     // Use simple space-separated query (more reliable than advanced syntax)
     const query = encodeURIComponent(`${cleanArtist} ${cleanTitle}`);
-    const response = await fetch(`${DEEZER_API_BASE}/search?q=${query}&limit=5`);
+    const url = `${DEEZER_API_BASE}/search?q=${query}&limit=5`;
+    const response = await fetchWithRetry(url, `search:"${title}" by "${artist}"`);
+    
+    if (!response) {
+      return null;
+    }
     
     if (!response.ok) {
       console.log(`Deezer search failed for "${title}" by "${artist}": ${response.status}`);
@@ -146,38 +253,51 @@ export async function getDeezerPreviewUrl(track: SpotifyTrack): Promise<string |
 
 /**
  * Batch fetch Deezer preview URLs for multiple Spotify tracks
- * Adds a small delay between requests to avoid rate limiting
+ * Processes tracks in parallel batches for better performance
+ * Deezer rate limit is 10 requests/second, so we use small batches with delays
  */
 export async function batchGetDeezerPreviews(
-  tracks: SpotifyTrack[]
+  tracks: SpotifyTrack[],
+  onProgress?: (completed: number, total: number) => void
 ): Promise<SpotifyTrack[]> {
-  const DELAY_MS = 100; // 100ms delay between requests to be nice to Deezer API
+  // Each track can make up to 2 API calls (ISRC + search fallback)
+  // Deezer rate limit is 10 req/sec, so batch size of 3 = max 6 req/batch
+  // With 500ms delay, we get ~2 batches/sec = ~12 req/sec worst case
+  // But many tracks hit cache or succeed on first try, so this is safe
+  const BATCH_SIZE = 3;
+  const BATCH_DELAY_MS = 500; // Delay between batches to stay under rate limit
+  const results: SpotifyTrack[] = [];
   
-  const tracksWithPreviews: SpotifyTrack[] = [];
+  // Report initial progress
+  onProgress?.(0, tracks.length);
   
-  for (let i = 0; i < tracks.length; i++) {
-    const track = tracks[i];
+  for (let i = 0; i < tracks.length; i += BATCH_SIZE) {
+    const batch = tracks.slice(i, i + BATCH_SIZE);
     
-    // Get preview URL
-    const deezerPreviewUrl = await getDeezerPreviewUrl(track);
+    // Process batch in parallel
+    const batchResults = await Promise.all(
+      batch.map(async (track) => ({
+        ...track,
+        deezerPreviewUrl: await getDeezerPreviewUrl(track),
+      }))
+    );
     
-    // Add to result with the preview URL
-    tracksWithPreviews.push({
-      ...track,
-      deezerPreviewUrl,
-    });
+    results.push(...batchResults);
     
-    // Add delay between requests (except for the last one)
-    if (i < tracks.length - 1) {
-      await new Promise((resolve) => setTimeout(resolve, DELAY_MS));
+    // Report progress after each batch
+    onProgress?.(results.length, tracks.length);
+    
+    // Add delay between batches to respect rate limit (except for last batch)
+    if (i + BATCH_SIZE < tracks.length) {
+      await new Promise((resolve) => setTimeout(resolve, BATCH_DELAY_MS));
     }
   }
   
   // Log summary
-  const foundCount = tracksWithPreviews.filter((t) => t.deezerPreviewUrl).length;
+  const foundCount = results.filter((t) => t.deezerPreviewUrl).length;
   console.log(`Deezer preview lookup complete: ${foundCount}/${tracks.length} tracks have previews`);
   
-  return tracksWithPreviews;
+  return results;
 }
 
 /**

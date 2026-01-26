@@ -65,6 +65,9 @@ export default function GamePage({ params }: { params: Promise<{ code: string }>
   const [roundScores, setRoundScores] = useState<Record<string, number>>({});
   const [timerRunning, setTimerRunning] = useState(false);
   const [resultsModalOpen, setResultsModalOpen] = useState(false);
+  const [hasHeartedThisRound, setHasHeartedThisRound] = useState(false);
+  const [heartCount, setHeartCount] = useState(0);
+  const [heartTotals, setHeartTotals] = useState<Record<string, number>>({});
 
   // Load player info from localStorage
   useEffect(() => {
@@ -158,13 +161,19 @@ export default function GamePage({ params }: { params: Promise<{ code: string }>
         setRoundScores({});
         setTimerRunning(true);
         setResultsModalOpen(false);
+        setHasHeartedThisRound(false);
+        setHeartCount(0);
       });
 
       channel.bind(GAME_EVENTS.PLAYER_GUESSED, (data: { playerId: string }) => {
         setGuessedPlayers((prev) => [...prev, data.playerId]);
       });
 
-      channel.bind(GAME_EVENTS.ROUND_END, (data: { round: Round; scores: Record<string, number>; roundScores: Record<string, number> }) => {
+      channel.bind(GAME_EVENTS.PLAYER_HEARTED, (data: { playerId: string; visibleHeartCount: number }) => {
+        setHeartCount(data.visibleHeartCount);
+      });
+
+      channel.bind(GAME_EVENTS.ROUND_END, (data: { round: Round & { hearts?: string[] }; scores: Record<string, number>; roundScores: Record<string, number>; heartTotals?: Record<string, number> }) => {
         setTimerRunning(false);
         setCurrentRound((prev) => {
           if (!prev) return prev;
@@ -184,6 +193,10 @@ export default function GamePage({ params }: { params: Promise<{ code: string }>
           return { ...prev, scores: data.scores };
         });
         setRoundScores(data.roundScores || {});
+        setHeartCount(data.round.hearts?.length || 0);
+        if (data.heartTotals) {
+          setHeartTotals(data.heartTotals);
+        }
         setShowResults(true);
         setResultsModalOpen(true);
       });
@@ -192,11 +205,14 @@ export default function GamePage({ params }: { params: Promise<{ code: string }>
         setTimerRunning(false);
       });
 
-      channel.bind(GAME_EVENTS.GAME_OVER, (data: { finalScores: Record<string, number> }) => {
+      channel.bind(GAME_EVENTS.GAME_OVER, (data: { finalScores: Record<string, number>; heartTotals?: Record<string, number> }) => {
         setGameState((prev) => {
           if (!prev) return prev;
           return { ...prev, scores: data.finalScores, status: 'finished' };
         });
+        if (data.heartTotals) {
+          setHeartTotals(data.heartTotals);
+        }
         setView('results');
       });
     } catch (err) {
@@ -278,6 +294,31 @@ export default function GamePage({ params }: { params: Promise<{ code: string }>
       }
     }
   }, [gameState, currentRound, currentPlayer, showResults]);
+
+  const handleHeart = useCallback(async () => {
+    if (!currentPlayer || !gameState || hasHeartedThisRound) return;
+    
+    setHasHeartedThisRound(true);
+    
+    try {
+      const response = await fetch('/api/game/heart', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: gameState.code,
+          playerId: currentPlayer.id,
+        }),
+      });
+      
+      if (!response.ok) {
+        // Revert on error
+        setHasHeartedThisRound(false);
+      }
+    } catch (err) {
+      console.error('Failed to submit heart:', err);
+      setHasHeartedThisRound(false);
+    }
+  }, [currentPlayer, gameState, hasHeartedThisRound]);
 
   const handlePlayAgain = () => {
     router.push('/');
@@ -418,6 +459,10 @@ export default function GamePage({ params }: { params: Promise<{ code: string }>
                     previewUrl={currentRound.song.track.deezerPreviewUrl}
                     revealed={showResults}
                     compact
+                    onHeart={handleHeart}
+                    hasHearted={hasHeartedThisRound}
+                    isOwnSong={currentRound.song.ownerId === currentPlayer?.id}
+                    heartCount={heartCount}
                   />
                 </div>
 
@@ -495,6 +540,7 @@ export default function GamePage({ params }: { params: Promise<{ code: string }>
               <Scoreboard
                 players={gameState.players}
                 scores={gameState.scores}
+                heartTotals={heartTotals}
               />
 
               <div className="mt-6 pb-4">
@@ -521,6 +567,7 @@ export default function GamePage({ params }: { params: Promise<{ code: string }>
           currentPlayerId={currentPlayer?.id || ''}
           selectedGuess={selectedGuess}
           hasGuessed={hasGuessed}
+          roundHearts={heartCount}
         />
       )}
     </main>

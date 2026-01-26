@@ -14,6 +14,11 @@ interface AudioPlayerProps {
   compact?: boolean;
   autoPlay?: boolean;
   revealed?: boolean; // false = pixelated album art, true = clear
+  // Heart functionality
+  onHeart?: () => void;
+  hasHearted?: boolean;
+  isOwnSong?: boolean;
+  heartCount?: number;
 }
 
 // Blurred album art component - hides album art during guessing
@@ -53,6 +58,10 @@ export function AudioPlayer({
   compact = false,
   autoPlay = false,
   revealed = true,
+  onHeart,
+  hasHearted = false,
+  isOwnSong = false,
+  heartCount = 0,
 }: AudioPlayerProps) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -148,6 +157,49 @@ export function AudioPlayer({
   };
 
   const progressPercent = duration > 0 ? (progress / duration) * 100 : 0;
+
+  // Heart button component
+  const HeartButton = () => {
+    // Don't show heart button if no handler
+    if (!onHeart) return null;
+
+    return (
+      <motion.button
+        whileHover={{ scale: 1.1 }}
+        whileTap={{ scale: 0.9 }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onHeart();
+        }}
+        disabled={hasHearted}
+        className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-full transition-all ${
+          hasHearted
+            ? "bg-pink-500/20 border border-pink-500/40 cursor-default"
+            : "bg-white/10 border border-white/20 hover:bg-pink-500/20 hover:border-pink-500/40"
+        }`}
+      >
+        <motion.svg
+          className={`w-4 h-4 ${hasHearted ? "text-pink-500" : "text-white/70"}`}
+          fill={hasHearted ? "currentColor" : "none"}
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+          initial={false}
+          animate={hasHearted ? { scale: [1, 1.3, 1] } : {}}
+          transition={{ duration: 0.3 }}
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z"
+          />
+        </motion.svg>
+        <span className={`text-xs font-medium ${hasHearted ? "text-pink-500" : "text-white/70"}`}>
+          {heartCount > 0 ? heartCount : "Love it"}
+        </span>
+      </motion.button>
+    );
+  };
 
   // Play button component
   const PlayButton = ({ size = "large" }: { size?: "small" | "large" }) => {
@@ -293,6 +345,13 @@ export function AudioPlayer({
             <p className="text-white/60 text-sm truncate px-2">{artistName}</p>
             {error && <p className="text-red-400 text-xs mt-1">{error}</p>}
           </div>
+
+          {/* Heart button - shown during guessing (not revealed) */}
+          {!revealed && onHeart && (
+            <div className="flex justify-center mb-3">
+              <HeartButton />
+            </div>
+          )}
 
           {/* Play button - shown separately when album art is revealed */}
           {showPlayer && revealed && (

@@ -1,4 +1,4 @@
-import { GameState, Player, Round, RoundSong, SpotifyTrack, TimeRange, RoundCount, ROUND_DURATION } from './types';
+import { GameState, Player, Round, RoundSong, SpotifyTrack, TimeRange, RoundCount, ROUND_DURATION, PlaylistSelection } from './types';
 import { createGameCode, shuffleArray } from '../utils';
 
 const DEFAULT_TOTAL_ROUNDS: RoundCount = 10;
@@ -54,6 +54,7 @@ export function createGame(
     currentRound: 0,
     totalRounds,
     scores: { [host.id]: 0 },
+    heartTotals: {},
     songPool: [],
     createdAt: Date.now(),
     timeRange,
@@ -73,12 +74,15 @@ export function addPlayerToGame(code: string, player: Player): GameState | null 
   const existingPlayer = game.players.find((p) => p.spotifyId === player.spotifyId);
   if (existingPlayer) {
     existingPlayer.isConnected = true;
+    existingPlayer.isReady = player.isReady;
     existingPlayer.topTracks = player.topTracks;
+    existingPlayer.selectedPlaylists = player.selectedPlaylists;
     return game;
   }
 
   game.players.push(player);
   game.scores[player.id] = 0;
+  game.heartTotals[player.id] = 0;
   return game;
 }
 
@@ -237,12 +241,18 @@ export function startGame(code: string): GameState | null {
   game.status = 'playing';
   game.currentRound = 0;
 
+  // Initialize heartTotals for all players
+  game.players.forEach((player) => {
+    game.heartTotals[player.id] = 0;
+  });
+
   // Initialize first round
   const firstRound: Round = {
     number: 1,
     song: songPool[0],
     guesses: {},
     guessTimestamps: {},
+    hearts: [],
     status: 'waiting',
   };
   game.rounds.push(firstRound);
@@ -292,7 +302,7 @@ export function submitGuess(
   return { round: currentRound, allGuessed };
 }
 
-export function endRound(code: string): { round: Round; scores: Record<string, number>; roundScores: Record<string, number> } | null {
+export function endRound(code: string): { round: Round; scores: Record<string, number>; roundScores: Record<string, number>; heartTotals: Record<string, number> } | null {
   const game = games.get(code);
   if (!game || game.status !== 'playing') {
     return null;
@@ -332,7 +342,7 @@ export function endRound(code: string): { round: Round; scores: Record<string, n
 
   currentRound.status = 'complete';
 
-  return { round: currentRound, scores: { ...game.scores }, roundScores };
+  return { round: currentRound, scores: { ...game.scores }, roundScores, heartTotals: { ...game.heartTotals } };
 }
 
 export function nextRound(code: string): Round | null {
@@ -354,6 +364,7 @@ export function nextRound(code: string): Round | null {
     song: nextSong,
     guesses: {},
     guessTimestamps: {},
+    hearts: [],
     status: 'waiting',
   };
   game.rounds.push(newRound);
@@ -361,8 +372,50 @@ export function nextRound(code: string): Round | null {
   return newRound;
 }
 
+export function submitHeart(
+  code: string,
+  playerId: string
+): { success: boolean; visibleHeartCount: number; isOwnSong?: boolean; error?: string } {
+  const game = games.get(code);
+  if (!game || game.status !== 'playing') {
+    return { success: false, visibleHeartCount: 0, error: 'Game not found or not playing' };
+  }
+
+  const currentRound = game.rounds[game.currentRound];
+  if (!currentRound || currentRound.status !== 'playing') {
+    return { success: false, visibleHeartCount: 0, error: 'Round not active' };
+  }
+
+  // Check if player is in the game
+  const player = game.players.find((p) => p.id === playerId);
+  if (!player) {
+    return { success: false, visibleHeartCount: 0, error: 'Player not in game' };
+  }
+
+  // Check if player has already hearted this round
+  if (currentRound.hearts.includes(playerId)) {
+    return { success: false, visibleHeartCount: currentRound.hearts.length, error: 'Already hearted this round' };
+  }
+
+  // Check if player is trying to heart their own song
+  // Allow the action to succeed (for UI purposes) but don't count it
+  const songOwnerId = currentRound.song.ownerId;
+  if (playerId === songOwnerId) {
+    return { success: true, visibleHeartCount: currentRound.hearts.length, isOwnSong: true };
+  }
+
+  // Add the heart
+  currentRound.hearts.push(playerId);
+
+  // Increment heart total for the song owner
+  game.heartTotals[songOwnerId] = (game.heartTotals[songOwnerId] || 0) + 1;
+
+  return { success: true, visibleHeartCount: currentRound.hearts.length };
+}
+
 export function getGameResults(code: string): {
   scores: Record<string, number>;
+  heartTotals: Record<string, number>;
   players: Player[];
 } | null {
   const game = games.get(code);
@@ -372,6 +425,7 @@ export function getGameResults(code: string): {
 
   return {
     scores: game.scores,
+    heartTotals: game.heartTotals,
     players: game.players,
   };
 }

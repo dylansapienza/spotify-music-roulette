@@ -1,6 +1,5 @@
 import type { Metadata, Viewport } from 'next';
 import { Inter } from 'next/font/google';
-import { SessionProvider } from '@/components/providers/session-provider';
 import './globals.css';
 
 const inter = Inter({
@@ -10,8 +9,8 @@ const inter = Inter({
 
 export const metadata: Metadata = {
   title: 'Music Roulette - Guess the Song Owner',
-  description: 'A multiplayer music guessing game powered by Spotify. Connect with friends and guess whose top songs are playing!',
-  keywords: ['music', 'game', 'spotify', 'multiplayer', 'guessing game'],
+  description: 'A multiplayer music guessing game powered by Spotify. Connect with friends and guess whose playlist songs are playing!',
+  keywords: ['music', 'game', 'spotify', 'multiplayer', 'guessing game', 'playlists'],
 };
 
 export const viewport: Viewport = {
@@ -30,7 +29,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${inter.variable} antialiased`}>
-        <SessionProvider>{children}</SessionProvider>
+        {children}
       </body>
     </html>
   );

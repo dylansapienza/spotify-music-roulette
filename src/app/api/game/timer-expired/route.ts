@@ -59,6 +59,7 @@ export async function POST(request: NextRequest) {
           status: endResult.round.status,
           guesses: endResult.round.guesses,
           guessTimestamps: endResult.round.guessTimestamps,
+          hearts: endResult.round.hearts,
           song: {
             track: {
               id: endResult.round.song.track.id,
@@ -76,6 +77,7 @@ export async function POST(request: NextRequest) {
         },
         scores: endResult.scores,
         roundScores: endResult.roundScores,
+        heartTotals: endResult.heartTotals,
       });
 
       // After a delay, either start next round or end game
@@ -86,6 +88,7 @@ export async function POST(request: NextRequest) {
           // Game over
           await triggerGameEvent(code.toUpperCase(), GAME_EVENTS.GAME_OVER, {
             finalScores: updatedGame.scores,
+            heartTotals: updatedGame.heartTotals,
           });
         } else {
           // Next round
@@ -100,6 +103,7 @@ export async function POST(request: NextRequest) {
                 status: newRound.status,
                 guesses: {},
                 guessTimestamps: {},
+                hearts: [],
                 startedAt: newRound.startedAt,
                 song: {
                   track: {

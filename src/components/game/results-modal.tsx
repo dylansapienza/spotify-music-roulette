@@ -16,6 +16,7 @@ interface ResultsModalProps {
   currentPlayerId: string;
   selectedGuess: string | null;
   hasGuessed: boolean;
+  roundHearts?: number;
 }
 
 export function ResultsModal({
@@ -30,6 +31,7 @@ export function ResultsModal({
   currentPlayerId,
   selectedGuess,
   hasGuessed,
+  roundHearts = 0,
 }: ResultsModalProps) {
   // Auto-close after 5 seconds
   useEffect(() => {
@@ -80,9 +82,23 @@ export function ResultsModal({
             {/* Header - Song owner reveal */}
             <div className="sticky top-0 bg-gradient-to-b from-zinc-900 to-zinc-900/95 p-4 pb-3 border-b border-white/10">
               <p className="text-white/60 text-sm text-center">This was</p>
-              <p className="text-2xl font-bold text-[#1DB954] text-center">
-                {songOwnerName}&apos;s song!
-              </p>
+              <div className="flex items-center justify-center gap-2">
+                <p className="text-2xl font-bold text-[#1DB954]">
+                  {songOwnerName}&apos;s song!
+                </p>
+                {roundHearts > 0 && (
+                  <motion.div 
+                    initial={{ scale: 0 }}
+                    animate={{ scale: 1 }}
+                    className="flex items-center gap-1 bg-pink-500/20 px-2 py-0.5 rounded-full"
+                  >
+                    <svg className="w-4 h-4 text-pink-500" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+                    </svg>
+                    <span className="text-pink-500 text-sm font-medium">{roundHearts}</span>
+                  </motion.div>
+                )}
+              </div>
               
               {/* Your result */}
               <div className="mt-2 text-center">

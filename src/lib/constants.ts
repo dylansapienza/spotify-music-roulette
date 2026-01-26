@@ -5,6 +5,7 @@ export const GAME_EVENTS = {
   GAME_STARTED: 'game-started',
   ROUND_START: 'round-start',
   PLAYER_GUESSED: 'player-guessed',
+  PLAYER_HEARTED: 'player-hearted',
   ROUND_END: 'round-end',
   TIMER_EXPIRED: 'timer-expired',
   GAME_OVER: 'game-over',
