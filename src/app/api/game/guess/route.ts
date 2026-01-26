@@ -82,44 +82,48 @@ export async function POST(request: NextRequest) {
         const updatedGame = getGame(code.toUpperCase());
         
         setTimeout(async () => {
-          if (updatedGame && updatedGame.currentRound + 1 >= updatedGame.totalRounds) {
-            // Game over
-            await triggerGameEvent(code.toUpperCase(), GAME_EVENTS.GAME_OVER, {
-              finalScores: updatedGame.scores,
-              heartTotals: updatedGame.heartTotals,
-            });
-          } else {
-            // Next round
-            const newRound = nextRound(code.toUpperCase());
-            if (newRound) {
-              // Start the round to set status to 'playing'
-              startRound(code.toUpperCase());
-              // Send minimal data for next round
-              await triggerGameEvent(code.toUpperCase(), GAME_EVENTS.ROUND_START, {
-                round: {
-                  number: newRound.number,
-                  status: newRound.status,
-                  guesses: {},
-                  guessTimestamps: {},
-                  hearts: [],
-                  startedAt: newRound.startedAt,
-                  song: {
-                    track: {
-                      id: newRound.song.track.id,
-                      name: newRound.song.track.name,
-                      artists: newRound.song.track.artists.map((a) => ({ name: a.name })),
-                      album: {
-                        name: newRound.song.track.album.name,
-                        images: newRound.song.track.album.images.slice(0, 1),
-                      },
-                      deezerPreviewUrl: newRound.song.track.deezerPreviewUrl,
-                    },
-                    ownerId: null,
-                    ownerName: null,
-                  },
-                },
+          try {
+            if (updatedGame && updatedGame.currentRound + 1 >= updatedGame.totalRounds) {
+              // Game over
+              await triggerGameEvent(code.toUpperCase(), GAME_EVENTS.GAME_OVER, {
+                finalScores: updatedGame.scores,
+                heartTotals: updatedGame.heartTotals,
               });
+            } else {
+              // Next round
+              const newRound = nextRound(code.toUpperCase());
+              if (newRound) {
+                // Start the round to set status to 'playing'
+                startRound(code.toUpperCase());
+                // Send minimal data for next round
+                await triggerGameEvent(code.toUpperCase(), GAME_EVENTS.ROUND_START, {
+                  round: {
+                    number: newRound.number,
+                    status: newRound.status,
+                    guesses: {},
+                    guessTimestamps: {},
+                    hearts: [],
+                    startedAt: newRound.startedAt,
+                    song: {
+                      track: {
+                        id: newRound.song.track.id,
+                        name: newRound.song.track.name,
+                        artists: newRound.song.track.artists.map((a) => ({ name: a.name })),
+                        album: {
+                          name: newRound.song.track.album.name,
+                          images: newRound.song.track.album.images.slice(0, 1),
+                        },
+                        deezerPreviewUrl: newRound.song.track.deezerPreviewUrl,
+                      },
+                      ownerId: null,
+                      ownerName: null,
+                    },
+                  },
+                });
+              }
             }
+          } catch (err) {
+            console.error('Error in delayed round transition:', err);
           }
         }, 5000); // 5 second delay between rounds
       }
