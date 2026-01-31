@@ -11,16 +11,6 @@ interface SpotifyInstructionsModalProps {
 const steps = [
   {
     number: 1,
-    title: 'Go to your profile',
-    description: 'Tap your profile picture in the top right',
-    icon: (
-      <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
-      </svg>
-    ),
-  },
-  {
-    number: 2,
     title: 'Tap the share button',
     description: 'Look for the three dots menu, then Share',
     icon: (
@@ -50,24 +40,13 @@ const steps = [
     ),
   },
   {
-    number: 3,
+    number: 2,
     title: 'Tap "Copy link"',
-    description: 'This copies your profile URL',
+    description: 'This copies your profile URL to paste back here',
     icon: (
       <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/>
         <path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/>
-      </svg>
-    ),
-  },
-  {
-    number: 4,
-    title: 'Come back and paste',
-    description: "We'll auto-detect your link!",
-    icon: (
-      <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M9 14l-4-4 4-4"/>
-        <path d="M5 10h11a4 4 0 014 4v3"/>
       </svg>
     ),
   },
