@@ -1,6 +1,17 @@
+import { Redis } from '@upstash/redis';
 import { SpotifyTrack } from './game/types';
 
 const DEEZER_API_BASE = 'https://api.deezer.com';
+
+// Redis client for persistent caching
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL!,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+});
+
+// Redis cache configuration
+const CACHE_PREFIX = 'deezer:preview:';
+const CACHE_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
 
 // Retry configuration
 const RETRY_CONFIG = {
@@ -214,58 +225,85 @@ export async function searchDeezerTrack(
 
 /**
  * Get the Deezer preview URL for a Spotify track
+ * Uses two-level caching: in-memory (L1) and Redis (L2)
  * Tries ISRC lookup first, then falls back to search
  */
 export async function getDeezerPreviewUrl(track: SpotifyTrack): Promise<string | null> {
-  // Check cache first
+  const cacheKey = `${CACHE_PREFIX}${track.id}`;
+
+  // L1: Check in-memory cache first (fastest)
   if (previewCache.has(track.id)) {
     return previewCache.get(track.id) ?? null;
   }
-  
+
+  // L2: Check Redis cache
+  try {
+    const cachedValue = await redis.get<string>(cacheKey);
+    if (cachedValue !== null) {
+      // Empty string means "not found on Deezer" (cached negative result)
+      const previewUrl = cachedValue === '' ? null : cachedValue;
+      // Populate L1 cache
+      previewCache.set(track.id, previewUrl);
+      console.log(`Redis cache hit for "${track.name}"`);
+      return previewUrl;
+    }
+  } catch (error) {
+    // Redis error - continue with API lookup
+    console.warn(`Redis cache read error for ${track.id}:`, error);
+  }
+
+  // Cache miss - do API lookup
   let deezerTrack: DeezerTrack | null = null;
-  
+
   // Try ISRC lookup first (most accurate)
   const isrc = track.external_ids?.isrc;
   if (isrc) {
     deezerTrack = await getDeezerTrackByISRC(isrc);
   }
-  
+
   // Fallback to search if ISRC lookup failed
   if (!deezerTrack) {
     const artistName = track.artists[0]?.name || '';
     deezerTrack = await searchDeezerTrack(track.name, artistName);
   }
-  
+
   // Extract preview URL
   const previewUrl = deezerTrack?.preview || null;
-  
-  // Cache the result (even if null to avoid repeated lookups)
+
+  // Cache the result in both L1 and L2
+  // Store empty string for null to distinguish from "not cached"
   previewCache.set(track.id, previewUrl);
-  
+
+  try {
+    await redis.set(cacheKey, previewUrl || '', { ex: CACHE_TTL_SECONDS });
+  } catch (error) {
+    console.warn(`Redis cache write error for ${track.id}:`, error);
+  }
+
   if (previewUrl) {
     console.log(`Found Deezer preview for "${track.name}": ${previewUrl.substring(0, 50)}...`);
   } else {
     console.log(`No Deezer preview found for "${track.name}" by ${track.artists[0]?.name}`);
   }
-  
+
   return previewUrl;
 }
 
 /**
  * Batch fetch Deezer preview URLs for multiple Spotify tracks
- * Processes tracks in parallel batches for better performance
- * Deezer rate limit is 10 requests/second, so we use small batches with delays
+ * Processes tracks sequentially with delays to avoid rate limiting
+ * Deezer rate limit is 10 requests/second - with multiple players joining
+ * simultaneously, we need to be conservative to avoid hitting limits
  */
 export async function batchGetDeezerPreviews(
   tracks: SpotifyTrack[],
   onProgress?: (completed: number, total: number) => void
 ): Promise<SpotifyTrack[]> {
-  // Each track can make up to 2 API calls (ISRC + search fallback)
-  // Deezer rate limit is 10 req/sec, so batch size of 3 = max 6 req/batch
-  // With 500ms delay, we get ~2 batches/sec = ~12 req/sec worst case
-  // But many tracks hit cache or succeed on first try, so this is safe
-  const BATCH_SIZE = 3;
-  const BATCH_DELAY_MS = 500; // Delay between batches to stay under rate limit
+  // Process 1 track at a time with 200ms delay between tracks
+  // This gives us ~5 req/sec per player (each track may need ISRC + search fallback)
+  // With Redis caching, most lookups will be cache hits anyway
+  const BATCH_SIZE = 1;
+  const BATCH_DELAY_MS = 200; // Delay between tracks to stay under rate limit
   const results: SpotifyTrack[] = [];
   
   // Report initial progress
