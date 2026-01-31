@@ -10,7 +10,10 @@ const redis = new Redis({
 });
 
 // Redis cache configuration
-const CACHE_PREFIX = 'deezer:preview:';
+// IMPORTANT: Deezer preview URLs contain time-limited tokens (exp= timestamp)
+// that expire after ~15-30 minutes. We cache the Deezer TRACK ID instead of
+// the preview URL, then construct fresh URLs on retrieval.
+const CACHE_PREFIX = 'deezer:trackid:';
 const CACHE_TTL_SECONDS = 60 * 60 * 24 * 7; // 7 days
 
 // Retry configuration
@@ -21,9 +24,10 @@ const RETRY_CONFIG = {
   jitterFactor: 0.3,      // Add up to 30% random jitter
 };
 
-// In-memory cache for Deezer preview URLs
-// Key: Spotify track ID, Value: Deezer preview URL or null if not found
-const previewCache = new Map<string, string | null>();
+// In-memory cache for Deezer track IDs
+// Key: Spotify track ID, Value: Deezer track ID or null if not found
+// We store track IDs instead of preview URLs because preview URLs expire
+const trackIdCache = new Map<string, number | null>();
 
 /**
  * Sleep for a given number of milliseconds
@@ -171,6 +175,27 @@ export async function getDeezerTrackByISRC(isrc: string): Promise<DeezerTrack | 
 }
 
 /**
+ * Get a fresh preview URL for a Deezer track by its ID
+ * This fetches a new URL with a fresh expiration token
+ */
+export async function getDeezerPreviewByTrackId(trackId: number): Promise<string | null> {
+  try {
+    const url = `${DEEZER_API_BASE}/track/${trackId}`;
+    const response = await fetchWithRetry(url, `track:${trackId}`);
+
+    if (!response || !response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+    return data.preview || null;
+  } catch (error) {
+    console.error(`Error fetching Deezer track ${trackId}:`, error);
+    return null;
+  }
+}
+
+/**
  * Search for a track on Deezer by title and artist name
  * This is the fallback method when ISRC lookup fails
  */
@@ -226,14 +251,30 @@ export async function searchDeezerTrack(
 /**
  * Get the Deezer preview URL for a Spotify track
  * Uses two-level caching: in-memory (L1) and Redis (L2)
+ *
+ * IMPORTANT: We cache Deezer TRACK IDs, not preview URLs, because preview URLs
+ * contain time-limited tokens that expire after ~15-30 minutes. By caching the
+ * track ID, we can fetch fresh preview URLs on demand.
+ *
  * Tries ISRC lookup first, then falls back to search
  */
 export async function getDeezerPreviewUrl(track: SpotifyTrack): Promise<string | null> {
   const cacheKey = `${CACHE_PREFIX}${track.id}`;
+  let deezerTrackId: number | null = null;
 
   // L1: Check in-memory cache first (fastest)
-  if (previewCache.has(track.id)) {
-    return previewCache.get(track.id) ?? null;
+  if (trackIdCache.has(track.id)) {
+    deezerTrackId = trackIdCache.get(track.id) ?? null;
+    if (deezerTrackId === null) {
+      // Cached negative result - no Deezer match exists
+      return null;
+    }
+    // Fetch fresh preview URL using cached track ID
+    const previewUrl = await getDeezerPreviewByTrackId(deezerTrackId);
+    if (previewUrl) {
+      console.log(`L1 cache hit for "${track.name}" (Deezer ID: ${deezerTrackId})`);
+    }
+    return previewUrl;
   }
 
   // L2: Check Redis cache
@@ -241,18 +282,30 @@ export async function getDeezerPreviewUrl(track: SpotifyTrack): Promise<string |
     const cachedValue = await redis.get<string>(cacheKey);
     if (cachedValue !== null) {
       // Empty string means "not found on Deezer" (cached negative result)
-      const previewUrl = cachedValue === '' ? null : cachedValue;
-      // Populate L1 cache
-      previewCache.set(track.id, previewUrl);
-      console.log(`Redis cache hit for "${track.name}"`);
-      return previewUrl;
+      if (cachedValue === '') {
+        trackIdCache.set(track.id, null);
+        console.log(`Redis cache hit (no match) for "${track.name}"`);
+        return null;
+      }
+
+      deezerTrackId = parseInt(cachedValue, 10);
+      if (!isNaN(deezerTrackId)) {
+        // Populate L1 cache
+        trackIdCache.set(track.id, deezerTrackId);
+        // Fetch fresh preview URL using cached track ID
+        const previewUrl = await getDeezerPreviewByTrackId(deezerTrackId);
+        if (previewUrl) {
+          console.log(`Redis cache hit for "${track.name}" (Deezer ID: ${deezerTrackId})`);
+        }
+        return previewUrl;
+      }
     }
   } catch (error) {
     // Redis error - continue with API lookup
     console.warn(`Redis cache read error for ${track.id}:`, error);
   }
 
-  // Cache miss - do API lookup
+  // Cache miss - do full API lookup
   let deezerTrack: DeezerTrack | null = null;
 
   // Try ISRC lookup first (most accurate)
@@ -267,21 +320,22 @@ export async function getDeezerPreviewUrl(track: SpotifyTrack): Promise<string |
     deezerTrack = await searchDeezerTrack(track.name, artistName);
   }
 
-  // Extract preview URL
+  // Extract track ID and preview URL
+  deezerTrackId = deezerTrack?.id ?? null;
   const previewUrl = deezerTrack?.preview || null;
 
-  // Cache the result in both L1 and L2
+  // Cache the track ID in both L1 and L2
   // Store empty string for null to distinguish from "not cached"
-  previewCache.set(track.id, previewUrl);
+  trackIdCache.set(track.id, deezerTrackId);
 
   try {
-    await redis.set(cacheKey, previewUrl || '', { ex: CACHE_TTL_SECONDS });
+    await redis.set(cacheKey, deezerTrackId?.toString() || '', { ex: CACHE_TTL_SECONDS });
   } catch (error) {
     console.warn(`Redis cache write error for ${track.id}:`, error);
   }
 
   if (previewUrl) {
-    console.log(`Found Deezer preview for "${track.name}": ${previewUrl.substring(0, 50)}...`);
+    console.log(`Found Deezer preview for "${track.name}" (Deezer ID: ${deezerTrackId}): ${previewUrl.substring(0, 50)}...`);
   } else {
     console.log(`No Deezer preview found for "${track.name}" by ${track.artists[0]?.name}`);
   }
@@ -339,8 +393,8 @@ export async function batchGetDeezerPreviews(
 }
 
 /**
- * Clear the preview URL cache (useful for testing)
+ * Clear the track ID cache (useful for testing)
  */
 export function clearDeezerCache(): void {
-  previewCache.clear();
+  trackIdCache.clear();
 }
