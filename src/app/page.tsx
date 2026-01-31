@@ -35,8 +35,12 @@ export default function Home() {
   const [selectedProfile, setSelectedProfile] = useState<SpotifyUserSearchResult | null>(null);
   const [selectedPlaylists, setSelectedPlaylists] = useState<PlaylistSelection[]>([]);
   const [isJoining, setIsJoining] = useState(false); // Track if we're joining vs creating
+  const [playlistsValid, setPlaylistsValid] = useState(false);
+  const [totalTrackCount, setTotalTrackCount] = useState(0);
 
-  const isSetupComplete = playerName.trim() && selectedProfile && selectedPlaylists.length > 0;
+  const MIN_REQUIRED_TRACKS = 25;
+
+  const isSetupComplete = playerName.trim() && selectedProfile && selectedPlaylists.length > 0 && playlistsValid;
 
   const handleStartSetup = (joining: boolean) => {
     setIsJoining(joining);
@@ -370,6 +374,11 @@ export default function Home() {
                       selectedPlaylists={selectedPlaylists}
                       onPlaylistsChange={setSelectedPlaylists}
                       maxPlaylists={5}
+                      minTotalTracks={MIN_REQUIRED_TRACKS}
+                      onValidationChange={(isValid, totalTracks) => {
+                        setPlaylistsValid(isValid);
+                        setTotalTrackCount(totalTracks);
+                      }}
                     />
                   </>
                 )}
@@ -384,11 +393,15 @@ export default function Home() {
                   {setupStep === 'playlists' ? (
                     <Button
                       onClick={handleContinueToGame}
-                      disabled={selectedPlaylists.length === 0}
+                      disabled={selectedPlaylists.length === 0 || !playlistsValid}
                       className="w-full"
                       size="lg"
                     >
-                      Continue
+                      {selectedPlaylists.length === 0
+                        ? 'Select at least 1 playlist'
+                        : !playlistsValid
+                          ? `Need ${MIN_REQUIRED_TRACKS - totalTrackCount} more tracks`
+                          : 'Continue'}
                     </Button>
                   ) : (
                     <Button

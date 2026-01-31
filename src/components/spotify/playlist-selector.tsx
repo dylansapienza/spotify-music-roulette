@@ -10,6 +10,8 @@ interface PlaylistSelectorProps {
   selectedPlaylists: PlaylistSelection[];
   onPlaylistsChange: (playlists: PlaylistSelection[]) => void;
   maxPlaylists?: number;
+  minTotalTracks?: number;
+  onValidationChange?: (isValid: boolean, totalTracks: number) => void;
 }
 
 export function PlaylistSelector({
@@ -17,10 +19,21 @@ export function PlaylistSelector({
   selectedPlaylists,
   onPlaylistsChange,
   maxPlaylists = 5,
+  minTotalTracks = 25,
+  onValidationChange,
 }: PlaylistSelectorProps) {
   const [playlists, setPlaylists] = useState<SpotifyPlaylist[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Calculate total tracks and validation state
+  const totalTracks = selectedPlaylists.reduce((sum, p) => sum + p.trackCount, 0);
+  const isValid = totalTracks >= minTotalTracks;
+
+  // Notify parent of validation state changes
+  useEffect(() => {
+    onValidationChange?.(isValid, totalTracks);
+  }, [isValid, totalTracks, onValidationChange]);
 
   useEffect(() => {
     if (!userId) return;
@@ -199,7 +212,16 @@ export function PlaylistSelector({
 
       {selectedPlaylists.length > 0 && (
         <div className="pt-4 border-t border-white/10">
-          <p className="text-sm text-white/60 mb-2">Selected playlists:</p>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm text-white/60">Selected playlists:</p>
+            <p className={cn(
+              "text-sm",
+              isValid ? "text-[#1DB954]" : "text-amber-400"
+            )}>
+              {totalTracks} tracks
+              {!isValid && ` (need ${minTotalTracks - totalTracks} more)`}
+            </p>
+          </div>
           <div className="flex flex-wrap gap-2">
             {selectedPlaylists.map((playlist) => (
               <span

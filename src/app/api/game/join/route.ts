@@ -9,6 +9,10 @@ import { nanoid } from 'nanoid';
 
 // Maximum number of songs to process per player (keeps loading fast)
 const MAX_SONGS_PER_PLAYER = 25;
+// Fetch more tracks initially to account for songs without Deezer previews
+const FETCH_MULTIPLIER = 2;
+// Minimum playable songs required (warn if below this)
+const MIN_PLAYABLE_SONGS = 10;
 
 export async function POST(request: NextRequest) {
   // Parse request body BEFORE creating the stream
@@ -72,10 +76,11 @@ export async function POST(request: NextRequest) {
 
         console.log(`Player ${playerName}: ${allTracks.length} unique tracks from playlists`);
 
-        // Randomly select up to MAX_SONGS_PER_PLAYER tracks to keep loading fast
+        // Fetch more tracks initially to account for songs without Deezer previews
         const shuffledTracks = shuffleArray(allTracks);
-        const selectedTracks = shuffledTracks.slice(0, MAX_SONGS_PER_PLAYER);
-        console.log(`Player ${playerName}: Selected ${selectedTracks.length} random tracks for processing`);
+        const initialFetchCount = MAX_SONGS_PER_PLAYER * FETCH_MULTIPLIER;
+        const selectedTracks = shuffledTracks.slice(0, initialFetchCount);
+        console.log(`Player ${playerName}: Selected ${selectedTracks.length} random tracks for Deezer lookup`);
 
         // Send progress update with total track count
         sendEvent({ type: 'progress', completed: 0, total: selectedTracks.length });
@@ -86,8 +91,21 @@ export async function POST(request: NextRequest) {
           sendEvent({ type: 'progress', completed, total });
         });
 
-        const playableCount = tracksWithPreviews.filter((t) => t.deezerPreviewUrl).length;
-        console.log(`Player ${playerName}: ${playableCount}/${tracksWithPreviews.length} tracks have Deezer previews`);
+        // Filter to only tracks that have a Deezer preview URL
+        const playableTracks = tracksWithPreviews.filter((t) => t.deezerPreviewUrl);
+        console.log(`Player ${playerName}: ${playableTracks.length}/${tracksWithPreviews.length} tracks have Deezer previews`);
+
+        // Take up to MAX_SONGS_PER_PLAYER playable tracks
+        const finalTracks = playableTracks.slice(0, MAX_SONGS_PER_PLAYER);
+        console.log(`Player ${playerName}: Using ${finalTracks.length} playable tracks`);
+
+        // Warn if we have fewer than minimum required playable songs
+        if (finalTracks.length < MIN_PLAYABLE_SONGS) {
+          sendEvent({
+            type: 'warning',
+            message: `Only ${finalTracks.length} songs have audio previews. Consider selecting different playlists with more popular music.`,
+          });
+        }
 
         // Create the player
         const player: Player = {
@@ -95,7 +113,7 @@ export async function POST(request: NextRequest) {
           name: playerName,
           image: playerImage,
           spotifyId: playerSpotifyId,
-          topTracks: tracksWithPreviews,
+          topTracks: finalTracks,
           selectedPlaylists,
           isHost: false,
           isConnected: true,
