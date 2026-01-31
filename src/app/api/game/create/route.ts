@@ -7,9 +7,9 @@ import { shuffleArray } from '@/lib/utils';
 import { nanoid } from 'nanoid';
 
 // Maximum number of songs to process per player (keeps loading fast)
-const MAX_SONGS_PER_PLAYER = 25;
+const MAX_SONGS_PER_PLAYER = 20;
 // Fetch more tracks initially to account for songs without Deezer previews
-const FETCH_MULTIPLIER = 2;
+const FETCH_MULTIPLIER = 1.5;
 // Minimum playable songs required (warn if below this)
 const MIN_PLAYABLE_SONGS = 10;
 

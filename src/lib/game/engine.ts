@@ -104,10 +104,45 @@ export async function removePlayerFromGame(code: string, playerId: string): Prom
 }
 
 /**
+ * Spread songs to prevent more than maxConsecutive songs from the same owner in a row
+ * Scans through the array and swaps songs when a violation is found
+ */
+function spreadSongsByOwner(songs: RoundSong[], maxConsecutive: number = 2): RoundSong[] {
+  if (songs.length <= maxConsecutive) return songs;
+
+  for (let i = maxConsecutive; i < songs.length; i++) {
+    // Check if current position creates a streak > maxConsecutive
+    let sameOwnerCount = 1;
+    for (let j = 1; j <= maxConsecutive; j++) {
+      if (songs[i - j].ownerId === songs[i].ownerId) {
+        sameOwnerCount++;
+      } else {
+        break;
+      }
+    }
+
+    // If we have too many consecutive songs from same owner, find a swap
+    if (sameOwnerCount > maxConsecutive) {
+      // Find a song later in the array with a different owner to swap with
+      for (let k = i + 1; k < songs.length; k++) {
+        if (songs[k].ownerId !== songs[i].ownerId) {
+          // Swap the songs
+          [songs[i], songs[k]] = [songs[k], songs[i]];
+          break;
+        }
+      }
+    }
+  }
+
+  return songs;
+}
+
+/**
  * Builds the song pool from all players' top tracks with EVEN distribution
  * - Each player contributes roughly equal number of songs
  * - Handles duplicates by assigning to player with higher rank
  * - Shuffles the result for random order
+ * - Spreads songs to prevent more than 2 consecutive from same owner
  */
 export function buildSongPool(players: Player[], totalRounds: number = DEFAULT_TOTAL_ROUNDS): RoundSong[] {
   const numPlayers = players.length;
@@ -193,7 +228,9 @@ export function buildSongPool(players: Player[], totalRounds: number = DEFAULT_T
   const distribution = players.map((p) => `${p.name.split(' ')[0]}: ${playerContributions[p.id] || 0}`).join(', ');
   console.log(`Song pool: ${balancedPool.length} songs (${distribution})`);
 
-  return shuffleArray(balancedPool);
+  // Shuffle then spread to prevent consecutive same-owner songs
+  const shuffledPool = shuffleArray(balancedPool);
+  return spreadSongsByOwner(shuffledPool, 2);
 }
 
 export async function startGame(code: string): Promise<GameState | null> {
